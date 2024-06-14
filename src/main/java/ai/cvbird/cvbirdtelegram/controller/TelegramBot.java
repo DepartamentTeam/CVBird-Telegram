@@ -1,14 +1,14 @@
 package ai.cvbird.cvbirdtelegram.controller;
 
+import ai.cvbird.cvbirdtelegram.client.AIServiceClient;
 import ai.cvbird.cvbirdtelegram.client.CVBirdSiteClient;
-import ai.cvbird.cvbirdtelegram.dto.RequestGetUserStatistic;
-import ai.cvbird.cvbirdtelegram.dto.StatisticConverter;
-import ai.cvbird.cvbirdtelegram.dto.StatisticDTO;
+import ai.cvbird.cvbirdtelegram.dto.*;
+import org.apache.commons.io.FileUtils;
 import org.jetbrains.annotations.NotNull;
+import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.beans.factory.annotation.Value;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Controller;
-import org.springframework.util.ResourceUtils;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.send.*;
 import org.telegram.telegrambots.meta.api.objects.*;
@@ -16,21 +16,25 @@ import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMa
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.KeyboardRow;
+import org.telegram.telegrambots.meta.api.objects.webapp.WebAppData;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
-import java.io.FileNotFoundException;
+import java.io.File;
+import java.io.FileOutputStream;
+import java.io.IOException;
+import java.io.InputStream;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.Date;
-import java.util.List;
+import java.util.*;
 
 @Controller
 public class TelegramBot extends TelegramLongPollingBot {
 
     @Autowired
-    CVBirdSiteClient cvBirdSiteFeignClient;
+    CVBirdSiteClient cvBirdSiteClient;
+
+    @Autowired
+    AIServiceClient aiServiceClient;
 
     @Autowired
     StatisticConverter statisticConverter;
@@ -43,9 +47,14 @@ public class TelegramBot extends TelegramLongPollingBot {
     public final String COMMANDS_M = "Commands";
     public final String VACANCIES_M = "Vacancies";
     public final Integer ONE = 1;
+    public final String JOB_RESPONSE = "job_response";
 
-    public TelegramBot(@Value("${tg.bot.token}") String botToken) {
-        super(botToken);
+    //public TelegramBot(@Value("${tg.bot.token}") String botToken) {
+    //    super(botToken);
+    //}
+
+    public TelegramBot() {
+        super(System.getenv("TG_BOT_TOKEN"));
     }
 
     @Override
@@ -59,6 +68,12 @@ public class TelegramBot extends TelegramLongPollingBot {
             Message message = update.getMessage();
             User user = message.getFrom();
             User forwardUser = message.getForwardFrom();
+            WebAppData webAppData = message.getWebAppData();
+
+            if (webAppData != null) {
+                webAppDataHandle(webAppData);
+            }
+
 
             if(message.hasText() || message.hasDocument()){
                 documentHandle(message);
@@ -69,6 +84,56 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     private void documentHandle(Message message) {}
 
+    private void webAppDataHandle(WebAppData webAppData) {
+        String data = webAppData.getData();
+        String buttonText = webAppData.getButtonText();
+        if (JOB_RESPONSE.equals(buttonText)) {
+            JSONObject obj = new JSONObject(data);
+            String employerId  = obj.getString("employer_id");
+            String applicantTelegramId = obj.getString("applicant_telegram_id");
+            String jobId = obj.getString("job_id");
+
+            if (!applicantTelegramId.isBlank()) {
+                StatisticDTO statisticDTO = cvBirdSiteClient.getTelegramUser(applicantTelegramId);
+                String userAccountName = "@"+statisticDTO.getTelegramUserName();
+
+                CVDataDTO cvDataDTO = cvBirdSiteClient.getCVByTelegramId(applicantTelegramId);
+
+                if (cvDataDTO != null) {
+                    String stringCVBase64 = cvDataDTO.getResponse();
+                    String path = base64Decode(stringCVBase64);
+                    if (path != null) {
+                        File file = new File(path);
+                        InputFile telegramFile = new InputFile(file);
+
+                        JobRequest jobRequest = new JobRequest(jobId);
+                        String job = aiServiceClient.getJobById(jobRequest);
+                        if (job != null) {
+                            JSONObject jobJson = new JSONObject(job);
+                            String jobTitle = jobJson.getJSONObject("job_info").getString("job_title");
+                            String chatId = jobJson.getJSONObject("job_info").getString("chat_id");
+
+                            String caption = userAccountName + " has responded to your vacancy " + jobTitle;
+
+                            if (!jobTitle.isBlank() && !chatId.isBlank()) {
+                                SendDocument  sendDocument = new SendDocument();
+                                sendDocument.setChatId(chatId);
+                                sendDocument.setDocument(telegramFile);
+                                sendDocument.setCaption(caption);
+                                try {
+                                    execute(sendDocument);
+                                } catch (TelegramApiException e) {
+                                    throw new RuntimeException(e);
+                                }
+                            }
+                        }
+
+                        deleteFile(path);
+                    }
+                }
+            }
+        }
+    }
 
     private void messageHandle(Message message) {
         String text = message.getText();
@@ -76,7 +141,7 @@ public class TelegramBot extends TelegramLongPollingBot {
         RequestGetUserStatistic requestGetUserStatistic = new RequestGetUserStatistic();
         requestGetUserStatistic.setTelegramId(message.getFrom().getId().toString());
         log(message.getFrom().getFirstName(),message.getFrom().getLastName(), message.getFrom().getId().toString(), message.getText());
-        if (cvBirdSiteFeignClient.getUserStatistic(requestGetUserStatistic) == null) {
+        if (cvBirdSiteClient.getUserStatistic(requestGetUserStatistic) == null) {
             saveStatistic(message);
         }
         if (text != null) {
@@ -157,41 +222,29 @@ public class TelegramBot extends TelegramLongPollingBot {
                 .builder()
                 .keyboardRow(Arrays.asList(InlineKeyboardButton
                                 .builder()
-                                .text("Row 1 Column 1")
-                                .callbackData("Row 1 Column 1")
-                                .build(),
-                        InlineKeyboardButton
-                                .builder()
-                                .text("Row 1 Column 2")
-                                .callbackData("Row 1 Column 2")
-                                .build())
-                )
-                .keyboardRow(Arrays.asList(InlineKeyboardButton
-                                .builder()
-                                .text("Row 2 Column 1")
-                                .callbackData("Row 2 Column 1")
-                                .build(),
-                        InlineKeyboardButton
-                                .builder()
-                                .text("Row 2 Column 2")
-                                .callbackData("Row 2 Column 2")
-                                .build())
-                )
+                                .text("Open in App")
+                                .callbackData("Open in App")
+                                .url("https://tg.cvbird.ai")
+                                .build()))
                 .build();
         try {
             SendPhoto sendPhoto = new SendPhoto();
             sendPhoto.setChatId(message.getChatId().toString());
-            sendPhoto.setCaption("you said: " + message.getText());
+            sendPhoto.setCaption("Your ChatID :  " + message.getChatId().toString());
             sendPhoto.setReplyMarkup(keyboard);
-            sendPhoto.setPhoto(new InputFile(ResourceUtils.getFile("classpath:cvbird_logo.png")));
+            File file = new File("tmp_logo.png");
+            InputStream inputStream = new ClassPathResource("cvbird_logo.png").getInputStream();
+            FileUtils.copyInputStreamToFile(inputStream, file);
+            sendPhoto.setPhoto(new InputFile(file));
+            //sendPhoto.setPhoto(new InputFile(ResourceUtils.getFile("classpath:cvbird_logo.png")));
             return  sendPhoto;
-        } catch (FileNotFoundException e) {
+        } catch (IOException e) {
             throw new RuntimeException(e);
         }
     }
 
     private SendMessage meCommand(Message message) {
-        String me = cvBirdSiteFeignClient.userInfo();
+        String me = cvBirdSiteClient.userInfo();
         SendMessage sendMessage = new SendMessage();
         sendMessage.setChatId(message.getChatId().toString());
         sendMessage.enableMarkdown(true);
@@ -223,7 +276,7 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     private void saveStatistic(Message message) {
         StatisticDTO statisticDTO =  statisticConverter.fromUser(message.getFrom());
-        String req = cvBirdSiteFeignClient.saveStatistic(statisticDTO);
+        String req = cvBirdSiteClient.saveStatistic(statisticDTO);
         System.out.println(req);
     }
 
@@ -235,65 +288,22 @@ public class TelegramBot extends TelegramLongPollingBot {
         System.out.print(" : Message from " + first_name + " " + last_name + ". (id = " + user_id + ") \n Text - " + txt);
     }
 
-    //private static String getHelpMessage(String language) {
-    //    String baseString = LocalisationService.getString("helpWeatherMessage", language);
-    //    return String.format(baseString, Emoji.BLACK_RIGHT_POINTING_TRIANGLE.toString(),
-    //            Emoji.BLACK_RIGHT_POINTING_DOUBLE_TRIANGLE.toString(), Emoji.ALARM_CLOCK.toString(),
-    //            Emoji.EARTH_GLOBE_EUROPE_AFRICA.toString(), Emoji.STRAIGHT_RULER.toString());
-    //}
+    private String base64Decode(String base64String) {
+        File file = new File(String.valueOf(System.currentTimeMillis()) + ".pdf");
+        try (FileOutputStream fos = new FileOutputStream(file); ) {
+            // To be short I use a corrupted PDF string, so make sure to use a valid one if you want to preview the PDF file
+            byte[] decoder = Base64.getDecoder().decode(base64String);
+            fos.write(decoder);
+            return file.getPath();
+        } catch (Exception e) {
+            e.printStackTrace();
+            return null;
+        }
+    }
 
-    //private static ReplyKeyboardMarkup getMainMenuKeyboard(String language) {
-    //    ReplyKeyboardMarkup.ReplyKeyboardMarkupBuilder<?, ?> replyKeyboardMarkupBuilder = ReplyKeyboardMarkup.builder();
-    //    replyKeyboardMarkupBuilder.selective(true);
-    //    replyKeyboardMarkupBuilder.resizeKeyboard(true);
-    //    replyKeyboardMarkupBuilder.oneTimeKeyboard(false);
-//
-    //    List<KeyboardRow> keyboard = new ArrayList<>();
-    //    KeyboardRow keyboardFirstRow = new KeyboardRow();
-    //    keyboardFirstRow.add(getCurrentCommand(language));
-    //    keyboardFirstRow.add(getForecastCommand(language));
-    //    KeyboardRow keyboardSecondRow = new KeyboardRow();
-    //    keyboardSecondRow.add(getSettingsCommand(language));
-    //    keyboardSecondRow.add(getRateCommand(language));
-    //    keyboard.add(keyboardFirstRow);
-    //    keyboard.add(keyboardSecondRow);
-    //    replyKeyboardMarkupBuilder.keyboard(keyboard);
-//
-    //    return replyKeyboardMarkupBuilder.build();
-    //}
-
-
-    //private static ReplyKeyboardMarkup getRecentsKeyboard(Long userId, String language, boolean allowNew) {
-    //    ReplyKeyboardMarkup.ReplyKeyboardMarkupBuilder<?, ?> replyKeyboardMarkupBuilder = ReplyKeyboardMarkup.builder();
-    //    replyKeyboardMarkupBuilder.selective(true);
-    //    replyKeyboardMarkupBuilder.resizeKeyboard(true);
-    //    replyKeyboardMarkupBuilder.oneTimeKeyboard(true);
-//
-    //    List<KeyboardRow> keyboard = new ArrayList<>();
-    //    for (String recentWeather : DatabaseManager.getInstance().getRecentWeather(userId)) {
-    //        KeyboardRow row = new KeyboardRow();
-    //        row.add(recentWeather);
-    //        keyboard.add(row);
-    //    }
-//
-    //    KeyboardRow row = new KeyboardRow();
-    //    if (allowNew) {
-    //        row.add(getLocationCommand(language));
-    //        keyboard.add(row);
-//
-    //        row = new KeyboardRow();
-    //        row.add(getNewCommand(language));
-    //        keyboard.add(row);
-//
-    //        row = new KeyboardRow();
-    //    }
-    //    row.add(getCancelCommand(language));
-    //    keyboard.add(row);
-//
-    //    replyKeyboardMarkupBuilder.keyboard(keyboard);
-//
-    //    return replyKeyboardMarkupBuilder.build();
-    //}
-//
+    private void deleteFile(String path) {
+        File file = new File(path);
+        file.delete();
+    }
 
 }
