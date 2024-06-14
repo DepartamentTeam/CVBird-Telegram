@@ -7,15 +7,13 @@ import org.apache.commons.io.FileUtils;
 import org.jetbrains.annotations.NotNull;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Controller;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.ParseMode;
 import org.telegram.telegrambots.meta.api.methods.send.*;
 import org.telegram.telegrambots.meta.api.objects.*;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.InlineKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.ReplyKeyboardMarkup;
-import org.telegram.telegrambots.meta.api.objects.replykeyboard.buttons.InlineKeyboardButton;
 import org.telegram.telegrambots.meta.api.objects.webapp.WebAppData;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
@@ -38,18 +36,19 @@ public class TelegramBot extends TelegramLongPollingBot {
 
     public final String START_C = "/start";
     public final String JOB_RESPONSE = "job_response";
-    public final String FIRST_MESSAGE = "tg://user?id=895038310 Hello! Welcome to CVBird — your personal job search assistant!\n We use cutting-edge artificial intelligence technology to analyze your resume and find the most suitable jobs around the world.\n" +
+    public final String FIRST_MESSAGE = "Hello! Welcome to CVBird — your personal job search assistant!\n" +
+            "We use cutting-edge artificial intelligence technology to analyze your resume and find the most suitable jobs around the world.\n" +
             "\n" +
             "To get started, go to our mini-app and upload your resume. Just click the button below and we will help you find your dream job!\n" +
             "\n" +
-            "If you have any questions or need help, don't hesitate to contact me. Good luck in your job search!\n\n";
+            "Good luck in your job search!\n\n";
 
     //public TelegramBot(@Value("${tg.bot.token}") String botToken) {
     //    super(botToken);
     //}
 
-    public TelegramBot() {
-        super("6986236750:AAEv0VeXfx3_e3QQuFIKNnbuMgyr7m3_dFA");
+    public TelegramBot(@Value("${tg.bot.token}") String botToken) {
+        super(botToken);
     }
 
     @Override
@@ -136,21 +135,11 @@ public class TelegramBot extends TelegramLongPollingBot {
     }
 
     private SendPhoto defaultCommand(Message message) {
-        InlineKeyboardMarkup keyboard = InlineKeyboardMarkup
-                .builder()
-                .keyboardRow(Arrays.asList(InlineKeyboardButton
-                                .builder()
-                                .text("Open in App")
-                                .callbackData("Open in App")
-                                .url("https://tg.cvbird.ai")
-                                .build()))
-                .build();
         try {
             SendPhoto sendPhoto = new SendPhoto();
             sendPhoto.setChatId(message.getChatId().toString());
             sendPhoto.setParseMode(ParseMode.HTML);
             sendPhoto.setCaption(FIRST_MESSAGE + "<b>Your ChatID : " + message.getChatId().toString() +"</b>");
-            sendPhoto.setReplyMarkup(keyboard);
             File file = new File("tmp_logo.png");
             InputStream inputStream = new ClassPathResource("cvbird_logo.png").getInputStream();
             FileUtils.copyInputStreamToFile(inputStream, file);
