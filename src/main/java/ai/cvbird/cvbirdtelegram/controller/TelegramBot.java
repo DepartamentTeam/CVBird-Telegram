@@ -3,6 +3,7 @@ package ai.cvbird.cvbirdtelegram.controller;
 import ai.cvbird.cvbirdtelegram.client.AIServiceClient;
 import ai.cvbird.cvbirdtelegram.client.CVBirdSiteClient;
 import ai.cvbird.cvbirdtelegram.dto.*;
+import feign.FeignException;
 import org.apache.commons.io.FileUtils;
 import org.jetbrains.annotations.NotNull;
 import org.json.JSONObject;
@@ -10,10 +11,13 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Controller;
+import org.springframework.util.ResourceUtils;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
 import org.telegram.telegrambots.meta.api.methods.ParseMode;
 import org.telegram.telegrambots.meta.api.methods.send.*;
 import org.telegram.telegrambots.meta.api.objects.*;
+import org.telegram.telegrambots.meta.api.objects.media.InputMedia;
+import org.telegram.telegrambots.meta.api.objects.media.InputMediaPhoto;
 import org.telegram.telegrambots.meta.api.objects.webapp.WebAppData;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
@@ -125,27 +129,48 @@ public class TelegramBot extends TelegramLongPollingBot {
         log(message.getFrom().getFirstName(),message.getFrom().getLastName(), message.getFrom().getId().toString(), message.getText());
 
         if (START_C.equals(text)) {
-            SendPhoto sendPhoto = defaultCommand(message);
+            User user = message.getFrom();
+            TelegramStatisticDTO telegramStatisticDTO = new TelegramStatisticDTO();
+            telegramStatisticDTO.setTelegramId(user.getId());
+            telegramStatisticDTO.setTelegramUserName(user.getUserName());
+            telegramStatisticDTO.setTelegramFirstName(user.getFirstName());
+            telegramStatisticDTO.setTelegramLastName(user.getLastName());
+            telegramStatisticDTO.setTelegramIsBot(user.getIsBot());
+            telegramStatisticDTO.setTelegramLanguageCode(user.getLanguageCode());
+            try{
+                System.out.println(cvBirdSiteClient.saveTelegramUser(telegramStatisticDTO));
+            }catch (FeignException e) {
+                System.out.println(e);
+            }
+            SendMediaGroup sendMediaGroup = defaultCommand(message);
             try {
-                execute(sendPhoto);
+                execute(sendMediaGroup);
             } catch (TelegramApiException e) {
                 throw new RuntimeException(e);
             }
         }
     }
 
-    private SendPhoto defaultCommand(Message message) {
+    private SendMediaGroup defaultCommand(Message message) {
         try {
-            SendPhoto sendPhoto = new SendPhoto();
-            sendPhoto.setChatId(message.getChatId().toString());
-            sendPhoto.setParseMode(ParseMode.HTML);
-            sendPhoto.setCaption(FIRST_MESSAGE + "<b>Your ChatID : " + message.getChatId().toString() +"</b>");
-            File file = new File("tmp_logo.png");
-            InputStream inputStream = new ClassPathResource("cvbird_logo.png").getInputStream();
-            FileUtils.copyInputStreamToFile(inputStream, file);
-            sendPhoto.setPhoto(new InputFile(file));
-            //sendPhoto.setPhoto(new InputFile(ResourceUtils.getFile("classpath:cvbird_logo.png")));
-            return  sendPhoto;
+            InputMedia inputMedia = new InputMediaPhoto();
+            inputMedia.setParseMode(ParseMode.HTML);
+            inputMedia.setCaption(FIRST_MESSAGE + "<b>Your ChatID : " + message.getChatId().toString() +"</b>");
+            inputMedia.setMedia(ResourceUtils.getFile("start_logo_1.png"), "one");
+
+            InputMedia inputMedia2 = new InputMediaPhoto();
+            inputMedia2.setMedia(ResourceUtils.getFile("start_logo_2.png"), "two");
+
+            InputMedia inputMedia3 = new InputMediaPhoto();
+            inputMedia3.setMedia(ResourceUtils.getFile("start_logo_3.png"), "3");
+
+            InputMedia inputMedia4 = new InputMediaPhoto();
+            inputMedia4.setMedia(ResourceUtils.getFile("start_logo_4.png"), "4");
+
+            SendMediaGroup mediaGroup = new SendMediaGroup();
+            mediaGroup.setChatId(message.getChatId());
+            mediaGroup.setMedias(List.of(inputMedia, inputMedia2, inputMedia3, inputMedia4));
+            return  mediaGroup;
         } catch (IOException e) {
             throw new RuntimeException(e);
         }
