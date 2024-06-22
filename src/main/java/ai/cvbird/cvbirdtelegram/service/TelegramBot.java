@@ -1,15 +1,13 @@
-package ai.cvbird.cvbirdtelegram.controller;
+package ai.cvbird.cvbirdtelegram.service;
 
 import ai.cvbird.cvbirdtelegram.client.AIServiceClient;
 import ai.cvbird.cvbirdtelegram.client.CVBirdSiteClient;
 import ai.cvbird.cvbirdtelegram.dto.*;
 import feign.FeignException;
-import org.apache.commons.io.FileUtils;
 import org.jetbrains.annotations.NotNull;
 import org.json.JSONObject;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
-import org.springframework.core.io.ClassPathResource;
 import org.springframework.stereotype.Controller;
 import org.springframework.util.ResourceUtils;
 import org.telegram.telegrambots.bots.TelegramLongPollingBot;
@@ -18,13 +16,9 @@ import org.telegram.telegrambots.meta.api.methods.send.*;
 import org.telegram.telegrambots.meta.api.objects.*;
 import org.telegram.telegrambots.meta.api.objects.media.InputMedia;
 import org.telegram.telegrambots.meta.api.objects.media.InputMediaPhoto;
-import org.telegram.telegrambots.meta.api.objects.webapp.WebAppData;
 import org.telegram.telegrambots.meta.exceptions.TelegramApiException;
 
-import java.io.File;
-import java.io.FileOutputStream;
-import java.io.IOException;
-import java.io.InputStream;
+import java.io.*;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
 import java.util.*;
@@ -39,7 +33,6 @@ public class TelegramBot extends TelegramLongPollingBot {
     AIServiceClient aiServiceClient;
 
     public final String START_C = "/start";
-    public final String JOB_RESPONSE = "job_response";
     public final String FIRST_MESSAGE = "Hello! Welcome to CVBird — your personal job search assistant!\n" +
             "We use cutting-edge artificial intelligence technology to analyze your resume and find the most suitable jobs around the world.\n" +
             "\n" +
@@ -64,62 +57,48 @@ public class TelegramBot extends TelegramLongPollingBot {
     public void onUpdateReceived(@NotNull Update update) {
         if(update.hasMessage()){
             Message message = update.getMessage();
-            WebAppData webAppData = message.getWebAppData();
-
-            if (webAppData != null) {
-                webAppDataHandle(webAppData);
-            }
             if (message.hasText() || message.hasDocument()){
                 messageHandle(message);
             }
         }
     }
 
-    private void webAppDataHandle(WebAppData webAppData) {
-        String data = webAppData.getData();
-        String buttonText = webAppData.getButtonText();
-        if (JOB_RESPONSE.equals(buttonText)) {
-            JSONObject obj = new JSONObject(data);
-            String applicantTelegramId = obj.getString("applicant_telegram_id");
-            String jobId = obj.getString("job_id");
+    public void sendEmployerResponse(EmployerResponse employerResponse) {
+        log("EMPLOYER RESPONCE:", employerResponse.getApplicantTelegramId(), employerResponse.getJobId(), "SEND");
+        String applicantTelegramId = employerResponse.getApplicantTelegramId();
+        String jobId = employerResponse.getJobId();
 
-            if (!applicantTelegramId.isBlank()) {
-                StatisticDTO statisticDTO = cvBirdSiteClient.getTelegramUser(applicantTelegramId);
-                String userAccountName = "@"+statisticDTO.getTelegramUserName();
+        if (!applicantTelegramId.isBlank()) {
+            StatisticDTO statisticDTO = cvBirdSiteClient.getTelegramUser(applicantTelegramId);
+            String userAccountName = "@"+statisticDTO.getTelegramUserName();
 
-                CVDataDTO cvDataDTO = cvBirdSiteClient.getCVByTelegramId(applicantTelegramId);
+            CVDataDTO cvDataDTO = cvBirdSiteClient.getCVByTelegramId(applicantTelegramId);
 
-                if (cvDataDTO != null) {
-                    String stringCVBase64 = cvDataDTO.getResponse();
-                    String path = base64Decode(stringCVBase64);
-                    if (path != null) {
-                        File file = new File(path);
-                        InputFile telegramFile = new InputFile(file);
+            if (cvDataDTO != null) {
+                String stringCVBase64 = cvDataDTO.getResponse();
+                InputStream inputStream = base64DecodeStream(stringCVBase64);
+                InputFile telegramFile = new InputFile(inputStream, statisticDTO.getTelegramUserName() + "-cv.pdf");
 
-                        JobRequest jobRequest = new JobRequest(jobId);
-                        String job = aiServiceClient.getJobById(jobRequest);
-                        if (job != null) {
-                            JSONObject jobJson = new JSONObject(job);
-                            String jobTitle = jobJson.getJSONObject("job_info").getString("job_title");
-                            String chatId = jobJson.getJSONObject("job_info").getString("chat_id");
-
-                            String caption = userAccountName + " has responded to your vacancy " + jobTitle;
-
-                            if (!jobTitle.isBlank() && !chatId.isBlank()) {
-                                SendDocument  sendDocument = new SendDocument();
-                                sendDocument.setChatId(chatId);
-                                sendDocument.setDocument(telegramFile);
-                                sendDocument.setCaption(caption);
-                                try {
-                                    execute(sendDocument);
-                                } catch (TelegramApiException e) {
-                                    throw new RuntimeException(e);
-                                }
-                            }
+                JobRequest jobRequest = new JobRequest(jobId);
+                String job = aiServiceClient.getJobById(jobRequest);
+                if (job != null) {
+                    JSONObject jobJson = new JSONObject(job);
+                    String jobTitle = jobJson.getJSONObject("job_info").getString("title");
+                    String chatId = jobJson.getJSONObject("job_info").optString("tg_chat_id");
+                    String caption = userAccountName + " has responded to your vacancy " + jobTitle;
+                    if (!jobTitle.isBlank() && chatId != null) {
+                        SendDocument  sendDocument = new SendDocument();
+                        sendDocument.setChatId(chatId);
+                        sendDocument.setDocument(telegramFile);
+                        sendDocument.setCaption(caption);
+                        try {
+                            execute(sendDocument);
+                        } catch (TelegramApiException e) {
+                            throw new RuntimeException(e);
                         }
-                        deleteFile(path);
                     }
                 }
+
             }
         }
     }
@@ -184,21 +163,15 @@ public class TelegramBot extends TelegramLongPollingBot {
         System.out.print(" : Message from " + first_name + " " + last_name + ". (id = " + user_id + ") \n Text - " + txt);
     }
 
-    private String base64Decode(String base64String) {
-        File file = new File(String.valueOf(System.currentTimeMillis()) + ".pdf");
-        try (FileOutputStream fos = new FileOutputStream(file); ) {
+    private InputStream base64DecodeStream(String base64String) {
+        try {
             // To be short I use a corrupted PDF string, so make sure to use a valid one if you want to preview the PDF file
             byte[] decoder = Base64.getDecoder().decode(base64String);
-            fos.write(decoder);
-            return file.getPath();
+            InputStream inputStream = new ByteArrayInputStream(decoder);
+            return inputStream;
         } catch (Exception e) {
             e.printStackTrace();
             return null;
         }
-    }
-
-    private void deleteFile(String path) {
-        File file = new File(path);
-        file.delete();
     }
 }
