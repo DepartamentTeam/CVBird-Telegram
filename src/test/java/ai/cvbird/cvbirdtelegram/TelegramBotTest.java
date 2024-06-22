@@ -1,6 +1,6 @@
 package ai.cvbird.cvbirdtelegram;
 
-import ai.cvbird.cvbirdtelegram.controller.TelegramBot;
+import ai.cvbird.cvbirdtelegram.service.TelegramBot;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
